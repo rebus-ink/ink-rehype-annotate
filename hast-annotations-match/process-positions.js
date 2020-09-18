@@ -1,6 +1,12 @@
-const visit = require("unist-util-visit");
+const visit = require("unist-util-visit-parents");
 const addPropsToNode = require("./add-props-to-node");
 const h = require("hastscript");
+const addParentProps = require("./add-parent-props");
+const encode = require("universal-base64url").encode;
+
+function getId(id) {
+  return `id-${encode(id)}`;
+}
 // const debug = require("../logger")("process-positions");
 
 /* 
@@ -23,13 +29,8 @@ For each selector:
 5. Add link to annotations collection id in head
 */
 
-module.exports = function processPositions(
-  tree,
-  file,
-  positionAnnotations,
-  { stimulus }
-) {
-  // Sort annotations based on selector.start, merge overlapping annotations
+module.exports = function processPositions(tree, positionAnnotations) {
+  // Sort annotations based on selector.start
   positionAnnotations.sort(
     (a, b) => a.target.selector.start - b.target.selector.start
   );
@@ -40,31 +41,19 @@ module.exports = function processPositions(
   const replacementActions = [];
   visit(tree, "text", visitor);
   replacementActions.forEach(fn => fn());
-  function visitor(node, index, parent) {
+  function visitor(node, ancestors) {
     if (!annotation) return;
-    // What should we do if the node selector has a highlighting purpose?
-    // -> The sensible solution is that highlights with a node selector are rendered differently (e.g. border or background behind entire node)
-    // That way we have fewer nestd marks to worry about.
-    // const { start, end } = annotation.target.selector;
-    // debug("visitor start: ", count, start, end, count + node.value.length);
     visitNode({
       count,
       currentAnnotation: annotation,
       node,
-      parent,
-      index,
-      stimulus
+      ancestors
     });
     count = count + node.value.length;
   }
-  function visitNode({
-    count,
-    currentAnnotation,
-    node,
-    parent,
-    index,
-    stimulus
-  }) {
+  function visitNode({ count, currentAnnotation, node, ancestors }) {
+    const parent = ancestors[ancestors.length - 1];
+    const textElement = ancestors.find(node => node.tagName === "text");
     const { end } = currentAnnotation.target.selector;
     const startInNode = startIsInNode(count, currentAnnotation, node);
     const endInNode = endIsInNode(count, currentAnnotation, node);
@@ -73,12 +62,14 @@ module.exports = function processPositions(
       endInNode,
       count,
       node,
+      svg: ancestors[ancestors.map(node => node.tagName).lastIndexOf("svg")],
       currentAnnotation,
-      stimulus
+      parent: textElement
     });
     if (replacement) {
       replacementActions.push(() => {
-        parent.children.splice(index, 1, ...replacement);
+        const newIndex = parent.children.indexOf(node);
+        parent.children.splice(newIndex, 1, ...replacement);
       });
     }
     if (endInNode) {
@@ -88,20 +79,19 @@ module.exports = function processPositions(
           count: end,
           currentAnnotation: annotation,
           node: suffix,
-          parent,
-          index: parent.children.indexOf(suffix),
-          stimulus
+          ancestors
         });
       }
     }
   }
 };
 
-function wrapNode(text, annotation, stimulus) {
+function wrapNode(text, annotation, svg, parent) {
   // If we decide to support linking purposes by rendering actual links then we need to change this and make sure we don't render nested links.
   // It's actually simpler in the meantime to support linking purposes by rendering a link button either after highlight or in sidebar.
-  const node = h("mark", text);
-  addPropsToNode(node, annotation, { stimulus });
+  const node = h(svg ? "tspan" : "mark", text);
+  addPropsToNode(node, annotation);
+  addParentProps(svg, node, parent);
   return node;
 }
 function getAnnotation(positionAnnotations) {
@@ -135,7 +125,8 @@ function processNode({
   count,
   node,
   currentAnnotation,
-  stimulus
+  svg,
+  parent
 }) {
   const { start, end } = currentAnnotation.target.selector;
   let replacement;
@@ -149,10 +140,12 @@ function processNode({
       const wrappedNode = wrapNode(
         node.value.slice(firstSplit, secondSplit),
         currentAnnotation,
-        stimulus
+        svg,
+        parent
       );
       const suffixValue = node.value.slice(secondSplit);
       suffix = { type: "text", value: suffixValue };
+      wrappedNode.properties.id = getId(currentAnnotation.id);
       replacement = [prefix, wrappedNode, suffix];
     }
     // else if (start) split at start, wrap the rest
@@ -164,8 +157,10 @@ function processNode({
       const wrappedNode = wrapNode(
         node.value.slice(firstSplit),
         currentAnnotation,
-        stimulus
+        svg,
+        parent
       );
+      wrappedNode.properties.id = getId(currentAnnotation.id);
       replacement = [prefix, wrappedNode];
     }
     // else if (end) split at end, wrap beginning
@@ -174,7 +169,8 @@ function processNode({
     const wrappedNode = wrapNode(
       node.value.slice(0, secondSplit),
       currentAnnotation,
-      stimulus
+      svg,
+      parent
     );
     suffix = { type: "text", value: node.value.slice(secondSplit) };
     replacement = [wrappedNode, suffix];
@@ -185,7 +181,7 @@ function processNode({
     node.value.trim()
   ) {
     // debug("whitespace: ", !node.value.trim());
-    replacement = [wrapNode(node.value, currentAnnotation, stimulus)];
+    replacement = [wrapNode(node.value, currentAnnotation, svg, parent)];
   }
   return { replacement, suffix };
 }

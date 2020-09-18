@@ -3,8 +3,35 @@ const rangeSelector = require("./range-selector");
 const getNode = require("./get-node");
 const processPositions = require("./process-positions");
 const processQuotations = require("./process-quotations");
-const { selectAll, select } = require("hast-util-select");
-const renderTemplates = require("./render-templates");
+const { selectAll } = require("hast-util-select");
+const info = require("property-information");
+const h = require("hastscript");
+// const visit = require("unist-util-visit-parents");
+const props = [
+  "x",
+  "y",
+  "width",
+  "height",
+  "textLength",
+  "font-size",
+  "data-annotation-id",
+  "data-annotation-x",
+  "data-annotation-y",
+  "data-annotation-width",
+  "data-annotation-height",
+  "data-annotation-offset",
+  "data-annotation-highlight",
+  "data-annotation-transform",
+  "data-annotation-highlight-box",
+  "pointer-events",
+  "transform",
+  "fill",
+  "class"
+];
+const attributes = {};
+for (const prop of props) {
+  attributes[prop] = info.find(info.svg, prop).property;
+}
 
 module.exports = matchAnnotations;
 
@@ -38,11 +65,7 @@ For each selector:
 
 */
 
-function matchAnnotations(
-  tree,
-  file,
-  { annotations, url, canonical, stimulus }
-) {
+function matchAnnotations(tree, file, { annotations, url, canonical, notes }) {
   // iterate through annotations
   let positionAnnotations = [];
   let quoteAnnotations = [];
@@ -61,16 +84,42 @@ function matchAnnotations(
           break;
         case "RangeSelector":
           // debug("using RangeSelector");
-          rangeSelector({ tree, selector, annotation, stimulus });
+          rangeSelector({ tree, selector, annotation });
           break;
         default:
-          getNode({ tree, selector, annotation, stimulus });
+          getNode({ tree, selector, annotation });
           break;
       }
     }
   }
-  processPositions(tree, file, positionAnnotations, { stimulus });
-  processQuotations(tree, file, quoteAnnotations, { stimulus });
+  processPositions(tree, positionAnnotations);
+  processQuotations(tree, quoteAnnotations);
+  selectAll("svg", tree).forEach(svg => {
+    const svgHighlights = selectAll("tspan[data-annotation-id]", svg).map(
+      node => {
+        const rect = h("rect");
+        rect.properties[attributes["data-annotation-highlight-box"]] = true;
+        rect.properties[attributes.x] =
+          node.properties[attributes["data-annotation-x"]];
+        rect.properties[attributes.y] =
+          node.properties[attributes["data-annotation-y"]];
+        rect.properties[attributes.width] =
+          node.properties[attributes["data-annotation-width"]];
+        rect.properties[attributes.height] =
+          node.properties[attributes["data-annotation-height"]];
+        rect.properties[attributes.transform] =
+          node.properties[attributes["data-annotation-transform"]];
+        rect.properties[attributes.fill] = "rgba(255, 255, 0, 0.35)";
+        const classes = [];
+        node.properties[attributes.class] = classes.concat(
+          node.properties[attributes.class]
+        );
+        rect.properties[attributes["pointer-events"]] = "none";
+        return rect;
+      }
+    );
+    svg.children = svg.children.concat(svgHighlights);
+  });
   const sortedAnnotationsId = selectAll("[data-annotation-id]", tree).map(
     node => node.properties.dataAnnotationId
   );
@@ -78,14 +127,23 @@ function matchAnnotations(
     annotations.find(annotation => annotation.id === id)
   );
   file.data.annotations = sortedAnnotations;
-  if (stimulus && annotations.length !== 0) {
-    const body = select("body", tree);
-    body.properties.dataController = ["annotations"];
-    const templates = renderTemplates(file.data.annotations);
-    body.children = templates.concat(body.children);
-  }
   function testSource(source) {
     return source === url || source === canonical;
   }
   return tree;
 }
+
+// function addHighlights (node, ancestors) {
+//   if (node.tagName === "tspan" && node.properties[attributes["data-annotation-id"]]) {
+//     const rect = h("rect[data-annotation-highlight-box]")
+//     rect.properties[attributes.x] = node.properties[attributes["data-annotation-x"]];
+//     rect.properties[attributes.y] = node.properties[attributes["data-annotation-y"]];
+//     rect.properties[attributes.width] = node.properties[attributes["data-annotation-width"]];
+//     rect.properties[attributes.height] = node.properties[attributes["data-annotation-height"]];
+//     rect.properties[attributes.transform] = node.properties[attributes["data-annotation-transform"]];
+//     rect.properties[attributes.fill] = "rgba(255, 255, 0, 0.5)"
+//     const classes = [];
+//     node.properties[attributes.class] = classes
+//       .concat(node.properties[attributes.class])
+//   }
+// }
